@@ -108,16 +108,18 @@ try {
 Write-Host "Pulling model: $Model" -ForegroundColor Cyan
 ollama pull $Model
 
-@"
-`$env:STELLA_MODEL = "$Model"
-& "$VenvPython" "$AgentFile" @args
-"@ | Set-Content -Path $LauncherPs1 -Encoding UTF8
+$LauncherPs1Lines = @(
+    "`$env:STELLA_MODEL = `"$Model`"",
+    "& `"$VenvPython`" `"$AgentFile`" @args"
+)
+Set-Content -Path $LauncherPs1 -Value $LauncherPs1Lines -Encoding UTF8
 
-@"
-@echo off
-set STELLA_MODEL=$Model
-"$VenvPython" "$AgentFile" %*
-"@ | Set-Content -Path $LauncherCmd -Encoding ASCII
+$LauncherCmdLines = @(
+    "@echo off",
+    "set STELLA_MODEL=$Model",
+    "`"$VenvPython`" `"$AgentFile`" %*"
+)
+Set-Content -Path $LauncherCmd -Value $LauncherCmdLines -Encoding ASCII
 
 Add-ToUserPath $InstallDir
 

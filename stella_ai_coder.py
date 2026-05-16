@@ -10,12 +10,15 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import html as html_lib
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import urllib.parse
+import webbrowser
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -31,7 +34,7 @@ from rich.text import Text
 
 
 APP_NAME = "Stella AI Coder"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.1.0"
 DEFAULT_MODEL = os.getenv("STELLA_MODEL", "qwen2.5-coder:1.5b")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 
@@ -44,37 +47,42 @@ console = Console()
 
 
 SYSTEM_PROMPT = """
-You are Stella AI Coder, a local terminal coding agent similar to Codex CLI, Claude Code, and Aider.
-You help users build, inspect, edit, debug, run, and ship software projects.
+Ты Stella AI Coder, локальный терминальный ИИ-агент для программирования, похожий на Codex CLI, Claude Code и Aider.
+Ты помогаешь пользователю создавать проекты, читать и редактировать код, запускать тесты, работать с Git/GitHub,
+искать информацию в интернете, открывать браузер, настраивать серверы и собирать готовые решения.
 
-Tool protocol:
-- When you need a tool, answer ONLY as strict JSON:
+Протокол инструментов:
+- Когда нужен инструмент, отвечай ТОЛЬКО строгим JSON:
   {"tool": "tool_name", "args": {"key": "value"}}
-- When done, answer ONLY as strict JSON:
-  {"final": "your helpful answer to the user"}
+- Когда задача завершена, отвечай ТОЛЬКО строгим JSON:
+  {"final": "полезный ответ пользователю на русском"}
 
-Operating style:
-- The user may write in Russian. Reply in the user's language.
-- Inspect before editing. Read files or search first when changing existing code.
-- Prefer small, correct edits. After meaningful changes, run relevant checks if available.
-- Never pretend that you executed a command or saw a file. Use tools for real state.
-- Keep paths relative to the active project root unless the user explicitly changes root.
-- Powerful shell commands ask the user for confirmation in the app.
-- Do not intentionally destroy user data. If a risky operation is needed, explain why.
+Стиль работы:
+- Всегда отвечай по-русски, если пользователь явно не попросил другой язык.
+- Действуй как аккуратный senior-разработчик: сначала изучай файлы, потом меняй.
+- Если нужно написать проект, создай файлы, установи зависимости через команды, запусти тест/проверку и объясни результат.
+- Никогда не притворяйся, что видел файл, сайт или вывод команды. Для реального состояния используй инструменты.
+- Пути держи внутри активной папки проекта, если пользователь явно не сменил корень через /папка или /cd.
+- Команды, которые меняют систему, сеть, серверы, GitHub, Docker, npm/pip/ssh, требуют подтверждения пользователя.
+- Не делай скрытое удалённое управление, обход авторизации, кражу токенов, вредоносный код или разрушительные действия.
+- Если пользователь просит Telegram-бота для управления своим ПК, делай только легальный вариант: явное согласие,
+  токен в .env, allowlist команд, логирование, подтверждения опасных действий, без скрытности и автозапуска без согласия.
 
-Available tools:
-- list_dir(path="."): list files and folders.
-- tree(path=".", depth=3): show a compact project tree.
-- find_files(query, path="."): search file names.
-- search_text(pattern, path="."): regex search inside text files.
-- read_file(path): read a text file.
-- write_file(path, content): create or overwrite a text file.
-- append_file(path, content): append text to a file.
-- edit_file(path, old, new): replace exact text in a file once.
-- make_dir(path): create a directory.
-- delete_path(path): delete a file or folder after user confirmation.
-- run_command(command, reason=""): run a terminal command in the project directory.
-- web_fetch(url): download text from a public http/https URL.
+Инструменты:
+- list_dir(path="."): список файлов и папок.
+- tree(path=".", depth=3): компактное дерево проекта.
+- find_files(query, path="."): поиск файлов по имени.
+- search_text(pattern, path="."): поиск текста/regex внутри файлов.
+- read_file(path): чтение текстового файла.
+- write_file(path, content): создание или перезапись файла.
+- append_file(path, content): добавление текста в файл.
+- edit_file(path, old, new): точная замена фрагмента в файле.
+- make_dir(path): создание папки.
+- delete_path(path): удаление файла/папки после подтверждения.
+- run_command(command, reason=""): запуск терминальной команды в папке проекта.
+- web_search(query, max_results=5): поиск в интернете.
+- web_fetch(url): чтение публичного URL.
+- open_url(url): открыть ссылку в браузере пользователя.
 """.strip()
 
 
@@ -163,7 +171,7 @@ class StellaAgent:
             tool_name = payload.get("tool")
             args = payload.get("args", {})
             if not isinstance(tool_name, str):
-                return "The model returned an invalid tool call."
+                return "Модель вернула некорректный вызов инструмента."
             if not isinstance(args, dict):
                 args = {}
 
@@ -177,7 +185,7 @@ class StellaAgent:
             )
             self._add_message("user", f"TOOL RESULT:\n{tool_message}")
 
-        return "I stopped after several tool calls to avoid an infinite loop. Tell me to continue if needed."
+        return "Я остановилась после нескольких вызовов инструментов, чтобы не уйти в бесконечный цикл. Напиши `продолжай`, если нужно идти дальше."
 
     def _add_message(self, role: str, content: str) -> None:
         self.messages.append({"role": role, "content": content})
@@ -199,7 +207,7 @@ class StellaAgent:
 
     def _call_ollama(self) -> str:
         try:
-            with console.status("[bold cyan]Stella is thinking...[/bold cyan]", spinner="dots12"):
+            with console.status("[bold cyan]Stella думает...[/bold cyan]", spinner="dots12"):
                 response = requests.post(
                     f"{OLLAMA_URL}/api/chat",
                     json={
@@ -212,16 +220,16 @@ class StellaAgent:
                 )
         except requests.ConnectionError as exc:
             raise RuntimeError(
-                "Ollama is not running. Start it with `ollama serve`, then run "
+                "Ollama не запущена. Запусти `ollama serve`, затем выполни "
                 f"`ollama pull {self.model}`."
             ) from exc
         except requests.Timeout as exc:
-            raise RuntimeError("Ollama timed out. Try again or use a smaller model.") from exc
+            raise RuntimeError("Ollama слишком долго не отвечает. Повтори запрос или выбери модель поменьше.") from exc
 
         if response.status_code == 404:
-            raise RuntimeError(f"Model `{self.model}` was not found. Run: ollama pull {self.model}")
+            raise RuntimeError(f"Модель `{self.model}` не найдена. Выполни: ollama pull {self.model}")
         if response.status_code >= 400:
-            raise RuntimeError(f"Ollama error {response.status_code}: {response.text[:700]}")
+            raise RuntimeError(f"Ошибка Ollama {response.status_code}: {response.text[:700]}")
 
         data = response.json()
         return data.get("message", {}).get("content", "").strip()
@@ -239,15 +247,17 @@ class StellaAgent:
             "make_dir": self.tool_make_dir,
             "delete_path": self.tool_delete_path,
             "run_command": self.tool_run_command,
+            "web_search": self.tool_web_search,
             "web_fetch": self.tool_web_fetch,
+            "open_url": self.tool_open_url,
         }
         fn = tools.get(name)
         if not fn:
-            return ToolResult(False, f"Unknown tool: {name}")
+            return ToolResult(False, f"Неизвестный инструмент: {name}")
         try:
             return fn(**args)
         except TypeError as exc:
-            return ToolResult(False, f"Wrong tool arguments for {name}: {exc}")
+            return ToolResult(False, f"Неверные аргументы инструмента {name}: {exc}")
         except Exception as exc:
             return ToolResult(False, f"{type(exc).__name__}: {exc}")
 
@@ -255,26 +265,26 @@ class StellaAgent:
         raw = (user_path or ".").strip()
         target = (self.root / raw).resolve()
         if target != self.root and self.root not in target.parents:
-            raise ValueError("Path is outside the active project root. Use /cd to change root.")
+            raise ValueError("Путь находится вне активной папки проекта. Используй /папка или /cd, чтобы сменить корень.")
         return target
 
     def tool_list_dir(self, path: str = ".") -> ToolResult:
         target = self.resolve_path(path)
         if not target.exists():
-            return ToolResult(False, f"Path does not exist: {path}")
+            return ToolResult(False, f"Путь не существует: {path}")
         if not target.is_dir():
-            return ToolResult(False, f"Not a directory: {path}")
+            return ToolResult(False, f"Это не папка: {path}")
 
         lines: list[str] = []
         for item in sorted(target.iterdir(), key=lambda p: (p.is_file(), p.name.lower())):
             marker = "/" if item.is_dir() else ""
             lines.append(f"{item.relative_to(self.root)}{marker}")
-        return ToolResult(True, "\n".join(lines) or "(empty)")
+        return ToolResult(True, "\n".join(lines) or "(пусто)")
 
     def tool_tree(self, path: str = ".", depth: int = 3) -> ToolResult:
         target = self.resolve_path(path)
         if not target.exists() or not target.is_dir():
-            return ToolResult(False, f"Directory does not exist: {path}")
+            return ToolResult(False, f"Папка не существует: {path}")
         depth = max(1, min(int(depth), 7))
         lines = [f"{target.relative_to(self.root) if target != self.root else '.'}/"]
         self._walk_tree(target, lines, "", depth)
@@ -301,7 +311,7 @@ class StellaAgent:
     def tool_find_files(self, query: str, path: str = ".") -> ToolResult:
         target = self.resolve_path(path)
         if not target.exists() or not target.is_dir():
-            return ToolResult(False, f"Directory does not exist: {path}")
+            return ToolResult(False, f"Папка не существует: {path}")
         query_lower = query.lower()
         matches: list[str] = []
         for item in target.rglob("*"):
@@ -311,16 +321,16 @@ class StellaAgent:
                 matches.append(str(item.relative_to(self.root)))
             if len(matches) >= 200:
                 break
-        return ToolResult(True, "\n".join(matches) or "(no matches)")
+        return ToolResult(True, "\n".join(matches) or "(ничего не найдено)")
 
     def tool_search_text(self, pattern: str, path: str = ".") -> ToolResult:
         target = self.resolve_path(path)
         if not target.exists():
-            return ToolResult(False, f"Path does not exist: {path}")
+            return ToolResult(False, f"Путь не существует: {path}")
         try:
             regex = re.compile(pattern, flags=re.IGNORECASE)
         except re.error as exc:
-            return ToolResult(False, f"Invalid regex: {exc}")
+            return ToolResult(False, f"Некорректный regex: {exc}")
 
         files = [target] if target.is_file() else [p for p in target.rglob("*") if p.is_file()]
         hits: list[str] = []
@@ -339,89 +349,125 @@ class StellaAgent:
                     hits.append(f"{file_path.relative_to(self.root)}:{line_no}: {line[:220]}")
                     if len(hits) >= 200:
                         return ToolResult(True, "\n".join(hits))
-        return ToolResult(True, "\n".join(hits) or "(no matches)")
+        return ToolResult(True, "\n".join(hits) or "(ничего не найдено)")
 
     def tool_read_file(self, path: str) -> ToolResult:
         target = self.resolve_path(path)
         if not target.exists():
-            return ToolResult(False, f"File does not exist: {path}")
+            return ToolResult(False, f"Файл не существует: {path}")
         if not target.is_file():
-            return ToolResult(False, f"Not a file: {path}")
+            return ToolResult(False, f"Это не файл: {path}")
         text = target.read_text(encoding="utf-8", errors="replace")
         if len(text) > MAX_FILE_CHARS:
-            text = text[:MAX_FILE_CHARS] + "\n\n[truncated]"
+            text = text[:MAX_FILE_CHARS] + "\n\n[обрезано]"
         return ToolResult(True, text)
 
     def tool_write_file(self, path: str, content: str) -> ToolResult:
         target = self.resolve_path(path)
         if target.exists():
             rel = target.relative_to(self.root)
-            if not Confirm.ask(f"Overwrite existing file `{rel}`?", default=False):
-                return ToolResult(False, "User declined overwrite.")
+            if not Confirm.ask(f"Перезаписать существующий файл `{rel}`?", default=False):
+                return ToolResult(False, "Пользователь отказался от перезаписи.")
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
-        return ToolResult(True, f"Written: {target.relative_to(self.root)} ({len(content)} chars)")
+        return ToolResult(True, f"Записано: {target.relative_to(self.root)} ({len(content)} символов)")
 
     def tool_append_file(self, path: str, content: str) -> ToolResult:
         target = self.resolve_path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
         with target.open("a", encoding="utf-8") as handle:
             handle.write(content)
-        return ToolResult(True, f"Appended: {target.relative_to(self.root)} ({len(content)} chars)")
+        return ToolResult(True, f"Добавлено: {target.relative_to(self.root)} ({len(content)} символов)")
 
     def tool_edit_file(self, path: str, old: str, new: str) -> ToolResult:
         target = self.resolve_path(path)
         if not target.exists() or not target.is_file():
-            return ToolResult(False, f"File does not exist: {path}")
+            return ToolResult(False, f"Файл не существует: {path}")
         text = target.read_text(encoding="utf-8", errors="replace")
         if old not in text:
-            return ToolResult(False, "Exact text to replace was not found.")
+            return ToolResult(False, "Точный фрагмент для замены не найден.")
         target.write_text(text.replace(old, new, 1), encoding="utf-8")
-        return ToolResult(True, f"Edited: {target.relative_to(self.root)}")
+        return ToolResult(True, f"Изменено: {target.relative_to(self.root)}")
 
     def tool_make_dir(self, path: str) -> ToolResult:
         target = self.resolve_path(path)
         target.mkdir(parents=True, exist_ok=True)
-        return ToolResult(True, f"Directory ready: {target.relative_to(self.root)}")
+        return ToolResult(True, f"Папка готова: {target.relative_to(self.root)}")
 
     def tool_delete_path(self, path: str) -> ToolResult:
         target = self.resolve_path(path)
         if not target.exists():
-            return ToolResult(False, f"Path does not exist: {path}")
+            return ToolResult(False, f"Путь не существует: {path}")
         rel = target.relative_to(self.root)
-        if not Confirm.ask(f"Delete `{rel}`?", default=False):
-            return ToolResult(False, "User declined delete.")
+        if not Confirm.ask(f"Удалить `{rel}`?", default=False):
+            return ToolResult(False, "Пользователь отказался от удаления.")
         if target.is_dir():
             shutil.rmtree(target)
         else:
             target.unlink()
-        return ToolResult(True, f"Deleted: {rel}")
+        return ToolResult(True, f"Удалено: {rel}")
+
+    def tool_web_search(self, query: str, max_results: int = 5) -> ToolResult:
+        max_results = max(1, min(int(max_results), 10))
+        url = "https://duckduckgo.com/html/?" + urllib.parse.urlencode({"q": query})
+        response = requests.get(
+            url,
+            timeout=35,
+            headers={"User-Agent": "Mozilla/5.0 Stella-AI-Coder/1.1"},
+        )
+        response.raise_for_status()
+
+        results: list[str] = []
+        blocks = re.findall(r'<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>(.*?)</a>', response.text, re.I | re.S)
+        for raw_href, raw_title in blocks:
+            href = html_lib.unescape(raw_href)
+            parsed = urllib.parse.urlparse(href)
+            query_params = urllib.parse.parse_qs(parsed.query)
+            if "uddg" in query_params:
+                href = query_params["uddg"][0]
+            title = strip_html(raw_title)
+            if title and href:
+                results.append(f"- {title}\n  {href}")
+            if len(results) >= max_results:
+                break
+
+        if not results:
+            return ToolResult(False, "Ничего не найдено. Попробуй другой запрос или дай прямую ссылку для web_fetch.")
+        return ToolResult(True, "\n".join(results))
 
     def tool_web_fetch(self, url: str) -> ToolResult:
         if not re.match(r"^https?://", url):
-            return ToolResult(False, "Only http:// and https:// URLs are supported.")
-        response = requests.get(url, timeout=35, headers={"User-Agent": "Stella-AI-Coder/1.0"})
+            return ToolResult(False, "Поддерживаются только ссылки http:// и https://.")
+        response = requests.get(url, timeout=35, headers={"User-Agent": "Stella-AI-Coder/1.1"})
         response.raise_for_status()
         text = response.text
         if len(text) > MAX_FILE_CHARS:
-            text = text[:MAX_FILE_CHARS] + "\n\n[truncated]"
+            text = text[:MAX_FILE_CHARS] + "\n\n[обрезано]"
         return ToolResult(True, text)
+
+    def tool_open_url(self, url: str) -> ToolResult:
+        if not re.match(r"^https?://", url):
+            return ToolResult(False, "Поддерживаются только ссылки http:// и https://.")
+        if not Confirm.ask(f"Открыть в браузере: {url}?", default=True):
+            return ToolResult(False, "Пользователь отказался открыть браузер.")
+        opened = webbrowser.open(url)
+        return ToolResult(opened, "Браузер открыт." if opened else "Не удалось открыть браузер.")
 
     def tool_run_command(self, command: str, reason: str = "") -> ToolResult:
         risk = classify_command(command)
         if risk == "blocked":
-            return ToolResult(False, "Command blocked because it looks destructive.")
+            return ToolResult(False, "Команда заблокирована: она выглядит разрушительной.")
         if risk == "confirm":
             console.print(
                 Panel(
-                    f"{command}\n\nReason: {reason or '(not provided)'}",
-                    title="Command approval",
+                    f"{command}\n\nПричина: {reason or '(не указана)'}",
+                    title="Подтверждение команды",
                     border_style="yellow",
                     box=box.ROUNDED,
                 )
             )
-            if not Confirm.ask("Allow Stella to run this command?", default=False):
-                return ToolResult(False, "User declined command.")
+            if not Confirm.ask("Разрешить Stella выполнить эту команду?", default=False):
+                return ToolResult(False, "Пользователь отказался выполнить команду.")
 
         completed = subprocess.run(
             command,
@@ -436,9 +482,9 @@ class StellaAgent:
             output += completed.stdout
         if completed.stderr:
             output += "\n[stderr]\n" + completed.stderr
-        output = output.strip() or "(no output)"
+        output = output.strip() or "(нет вывода)"
         if len(output) > MAX_COMMAND_OUTPUT:
-            output = output[:MAX_COMMAND_OUTPUT] + "\n\n[truncated]"
+            output = output[:MAX_COMMAND_OUTPUT] + "\n\n[обрезано]"
         return ToolResult(completed.returncode == 0, f"exit_code={completed.returncode}\n{output}")
 
     def _print_tool_result(self, name: str, args: dict[str, Any], result: ToolResult) -> None:
@@ -448,7 +494,7 @@ class StellaAgent:
         console.print(
             Panel(
                 f"[dim]{escape_rich(arg_text)}[/dim]\n\n{escape_rich(content)}",
-                title=f"tool: {name} [{'ok' if result.ok else 'error'}]",
+                title=f"инструмент: {name} [{'готово' if result.ok else 'ошибка'}]",
                 border_style=color,
                 box=box.ROUNDED,
             )
@@ -559,10 +605,10 @@ def check_ollama(model: str, quiet: bool = False) -> bool:
         if not quiet:
             console.print(
                 Panel(
-                    "Ollama is not responding.\n\n"
-                    "Install Ollama: https://ollama.com/download\n"
-                    f"Then run: ollama pull {model}",
-                    title="Ollama offline",
+                    "Ollama не отвечает.\n\n"
+                    "Установи Ollama: https://ollama.com/download\n"
+                    f"Затем выполни: ollama pull {model}",
+                    title="Ollama не запущена",
                     border_style="red",
                 )
             )
@@ -570,7 +616,7 @@ def check_ollama(model: str, quiet: bool = False) -> bool:
 
     if response.status_code >= 400:
         if not quiet:
-            console.print(f"[red]Ollama error:[/red] {response.status_code}")
+            console.print(f"[red]Ошибка Ollama:[/red] {response.status_code}")
         return False
 
     tags = response.json().get("models", [])
@@ -579,8 +625,8 @@ def check_ollama(model: str, quiet: bool = False) -> bool:
         if not quiet:
             console.print(
                 Panel(
-                    f"Model `{model}` is not installed yet.\n\nRun: ollama pull {model}",
-                    title="Model missing",
+                    f"Модель `{model}` ещё не установлена.\n\nВыполни: ollama pull {model}",
+                    title="Модель не найдена",
                     border_style="yellow",
                 )
             )
@@ -594,10 +640,10 @@ def print_banner(model: str, root: Path) -> None:
     console.print(
         Panel(
             f"[bold magenta]{APP_NAME}[/bold magenta] [dim]v{APP_VERSION}[/dim]\n"
-            f"[cyan]model[/cyan]: {model}\n"
-            f"[cyan]project[/cyan]: {root}\n\n"
-            "Chat normally. Commands: [bold]/help[/bold], [bold]/doctor[/bold], [bold]/model[/bold], "
-            "[bold]/cd[/bold], [bold]/clear[/bold], [bold]/exit[/bold]",
+            f"[cyan]модель[/cyan]: {model}\n"
+            f"[cyan]проект[/cyan]: {root}\n\n"
+            "Пиши обычным языком. Команды: [bold]/помощь[/bold], [bold]/доктор[/bold], [bold]/модель[/bold], "
+            "[bold]/папка[/bold], [bold]/очистить[/bold], [bold]/выход[/bold]",
             border_style="bright_magenta",
             box=box.DOUBLE,
         )
@@ -606,35 +652,35 @@ def print_banner(model: str, root: Path) -> None:
 
 def print_help() -> None:
     table = Table(title="Stella AI Coder", box=box.ROUNDED, border_style="cyan")
-    table.add_column("Command / tool", style="bold magenta")
-    table.add_column("What it does", style="white")
-    table.add_row("/help", "Show help")
-    table.add_row("/doctor", "Check Python, Ollama, Git, GitHub CLI, and current model")
-    table.add_row("/model NAME", "Switch Ollama model, for example /model qwen2.5-coder:3b")
-    table.add_row("/cd PATH", "Change active project root")
-    table.add_row("/pwd", "Show active project root")
-    table.add_row("/clear", "Clear chat memory for this session")
-    table.add_row("/exit", "Exit")
-    table.add_row("tree / list_dir / find_files / search_text", "Inspect project structure and code")
-    table.add_row("read_file / write_file / append_file / edit_file", "Read and edit files")
-    table.add_row("make_dir / delete_path", "Create or delete paths; delete asks for confirmation")
-    table.add_row("run_command", "Run terminal commands; powerful commands ask for confirmation")
-    table.add_row("web_fetch", "Read public URLs such as GitHub raw files or docs")
+    table.add_column("Команда / инструмент", style="bold magenta")
+    table.add_column("Что делает", style="white")
+    table.add_row("/помощь или /help", "Показать справку")
+    table.add_row("/доктор или /doctor", "Проверить Python, Ollama, Git, GitHub CLI, Docker, Node, npm")
+    table.add_row("/модель NAME", "Переключить модель, например /модель qwen2.5-coder:3b")
+    table.add_row("/папка PATH", "Сменить активную папку проекта")
+    table.add_row("/где или /pwd", "Показать активную папку проекта")
+    table.add_row("/очистить", "Очистить память текущей сессии")
+    table.add_row("/выход", "Выйти")
+    table.add_row("tree / list_dir / find_files / search_text", "Изучение структуры проекта и кода")
+    table.add_row("read_file / write_file / append_file / edit_file", "Чтение и редактирование файлов")
+    table.add_row("make_dir / delete_path", "Создание и удаление; удаление требует подтверждения")
+    table.add_row("run_command", "Запуск команд; мощные команды требуют подтверждения")
+    table.add_row("web_search / web_fetch / open_url", "Поиск в интернете, чтение URL и открытие браузера")
     console.print(table)
 
 
 def print_doctor(model: str) -> None:
-    table = Table(title="Stella Doctor", box=box.ROUNDED, border_style="cyan")
-    table.add_column("Check", style="bold magenta")
-    table.add_column("Result", style="white")
+    table = Table(title="Диагностика Stella", box=box.ROUNDED, border_style="cyan")
+    table.add_column("Проверка", style="bold magenta")
+    table.add_column("Результат", style="white")
     table.add_row("Python", sys.version.split()[0])
-    table.add_row("Ollama API", "ok" if requests_ok(f"{OLLAMA_URL}/api/tags") else "not responding")
-    table.add_row("Model", f"{model} ok" if check_ollama(model, quiet=True) else f"{model} missing/offline")
-    table.add_row("git", shutil.which("git") or "not found")
-    table.add_row("gh", shutil.which("gh") or "not found")
-    table.add_row("docker", shutil.which("docker") or "not found")
-    table.add_row("node", shutil.which("node") or "not found")
-    table.add_row("npm", shutil.which("npm") or "not found")
+    table.add_row("Ollama API", "готово" if requests_ok(f"{OLLAMA_URL}/api/tags") else "не отвечает")
+    table.add_row("Модель", f"{model} готова" if check_ollama(model, quiet=True) else f"{model} не найдена/offline")
+    table.add_row("git", shutil.which("git") or "не найден")
+    table.add_row("gh", shutil.which("gh") or "не найден")
+    table.add_row("docker", shutil.which("docker") or "не найден")
+    table.add_row("node", shutil.which("node") or "не найден")
+    table.add_row("npm", shutil.which("npm") or "не найден")
     console.print(table)
 
 
@@ -657,12 +703,17 @@ def escape_rich(text: str) -> str:
     return text.replace("[", "\\[").replace("]", "\\]")
 
 
+def strip_html(text: str) -> str:
+    text = re.sub(r"<[^>]+>", "", text)
+    return html_lib.unescape(re.sub(r"\s+", " ", text)).strip()
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Stella AI Coder")
-    parser.add_argument("model_arg", nargs="?", help="Optional Ollama model name")
-    parser.add_argument("--model", dest="model", help="Ollama model name")
-    parser.add_argument("--root", dest="root", help="Project root")
-    parser.add_argument("--version", action="store_true", help="Print version and exit")
+    parser.add_argument("model_arg", nargs="?", help="Необязательное имя модели Ollama")
+    parser.add_argument("--model", dest="model", help="Имя модели Ollama")
+    parser.add_argument("--root", dest="root", help="Папка проекта")
+    parser.add_argument("--version", action="store_true", help="Показать версию и выйти")
     return parser.parse_args(argv)
 
 
@@ -684,61 +735,61 @@ def main(argv: list[str] | None = None) -> int:
 
     while True:
         try:
-            user_text = Prompt.ask("\n[bold bright_green]you[/bold bright_green]").strip()
+            user_text = Prompt.ask("\n[bold bright_green]ты[/bold bright_green]").strip()
         except (KeyboardInterrupt, EOFError):
-            console.print("\n[magenta]Bye. Stella is shutting down.[/magenta]")
+            console.print("\n[magenta]Пока. Stella выключается.[/magenta]")
             return 0
 
         if not user_text:
             continue
 
         lower = user_text.lower()
-        if lower in {"/exit", "exit", "quit"}:
-            console.print("[magenta]Bye. Stella is shutting down.[/magenta]")
+        if lower in {"/exit", "exit", "quit", "/выход", "выход"}:
+            console.print("[magenta]Пока. Stella выключается.[/magenta]")
             return 0
-        if lower == "/help":
+        if lower in {"/help", "/помощь", "/команды"}:
             print_help()
             continue
-        if lower == "/doctor":
+        if lower in {"/doctor", "/доктор", "/диагностика"}:
             print_doctor(agent.model)
             continue
-        if lower == "/pwd":
-            console.print(Panel(str(agent.root), title="Project root", border_style="cyan"))
+        if lower in {"/pwd", "/где", "/папка?"}:
+            console.print(Panel(str(agent.root), title="Папка проекта", border_style="cyan"))
             continue
-        if lower == "/clear":
+        if lower in {"/clear", "/очистить"}:
             agent.clear()
-            console.print("[green]Context cleared.[/green]")
+            console.print("[green]Контекст очищен.[/green]")
             continue
-        if lower.startswith("/model"):
+        if lower.startswith("/model") or lower.startswith("/модель"):
             parts = user_text.split(maxsplit=1)
             if len(parts) == 1:
-                console.print(Panel(agent.model, title="Current model", border_style="cyan"))
+                console.print(Panel(agent.model, title="Текущая модель", border_style="cyan"))
                 continue
             new_model = parts[1].strip()
             agent.set_model(new_model)
             if check_ollama(new_model):
-                console.print(f"[green]Model switched to {new_model}[/green]")
+                console.print(f"[green]Модель переключена на {new_model}[/green]")
             continue
-        if lower.startswith("/cd"):
+        if lower.startswith("/cd") or lower.startswith("/папка"):
             parts = user_text.split(maxsplit=1)
             if len(parts) == 1:
-                console.print("[yellow]Usage: /cd PATH[/yellow]")
+                console.print("[yellow]Использование: /папка PATH[/yellow]")
                 continue
             new_root = Path(parts[1]).expanduser().resolve()
             if not new_root.exists() or not new_root.is_dir():
-                console.print(f"[red]Directory not found:[/red] {new_root}")
+                console.print(f"[red]Папка не найдена:[/red] {new_root}")
                 continue
             agent.set_root(new_root)
-            console.print(f"[green]Project root changed:[/green] {new_root}")
+            console.print(f"[green]Папка проекта изменена:[/green] {new_root}")
             continue
 
         try:
             answer = agent.chat(user_text)
         except RuntimeError as exc:
-            console.print(Panel(str(exc), title="Error", border_style="red"))
+            console.print(Panel(str(exc), title="Ошибка", border_style="red"))
             continue
         except Exception as exc:
-            console.print(Panel(f"{type(exc).__name__}: {exc}", title="Unexpected error", border_style="red"))
+            console.print(Panel(f"{type(exc).__name__}: {exc}", title="Неожиданная ошибка", border_style="red"))
             continue
 
         render_answer(answer)

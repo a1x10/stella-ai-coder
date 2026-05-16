@@ -7,9 +7,9 @@ VENV_DIR="${INSTALL_DIR}/.venv"
 MODEL="${STELLA_MODEL:-qwen2.5-coder:1.5b}"
 BIN_DIR="${HOME}/.local/bin"
 
-printf "\n=== Stella AI Coder installer ===\n"
-printf "Install dir: %s\n" "$INSTALL_DIR"
-printf "Model: %s\n\n" "$MODEL"
+printf "\n=== Установщик Stella AI Coder ===\n"
+printf "Папка установки: %s\n" "$INSTALL_DIR"
+printf "Модель: %s\n\n" "$MODEL"
 
 mkdir -p "$INSTALL_DIR" "$BIN_DIR"
 
@@ -19,29 +19,29 @@ need_cmd() {
 
 download_file() {
   name="$1"
-  printf "Downloading %s\n" "$name"
+  printf "Скачиваю %s\n" "$name"
   if need_cmd curl; then
     curl -fsSL "${REPO_RAW}/${name}" -o "${INSTALL_DIR}/${name}"
   elif need_cmd wget; then
     wget -q "${REPO_RAW}/${name}" -O "${INSTALL_DIR}/${name}"
   else
-    echo "curl or wget is required."
+    echo "Нужен curl или wget."
     exit 1
   fi
 }
 
 if ! need_cmd python3; then
-  echo "Python 3.10+ is required. Install Python and run this command again."
+  echo "Нужен Python 3.10+. Установи Python и запусти команду снова."
   exit 1
 fi
 
 if ! need_cmd ollama; then
-  echo "Ollama was not found."
-  printf "Install Ollama now using the official installer? Type y to continue: "
+  echo "Ollama не найдена."
+  printf "Установить Ollama официальным установщиком? Введи y для продолжения: "
   read ans
   case "$ans" in
     y|Y) curl -fsSL https://ollama.com/install.sh | sh ;;
-    *) echo "Install Ollama from https://ollama.com/download and run again."; exit 1 ;;
+    *) echo "Установи Ollama с https://ollama.com/download и запусти команду снова."; exit 1 ;;
   esac
 fi
 
@@ -56,7 +56,7 @@ fi
 "${VENV_DIR}/bin/python" -m pip install -r "${INSTALL_DIR}/requirements.txt"
 
 if ! curl -fsSL http://localhost:11434/api/tags >/dev/null 2>&1; then
-  echo "Starting Ollama in background"
+  echo "Запускаю Ollama в фоне"
   nohup ollama serve >/tmp/stella-ollama.log 2>&1 &
   sleep 5
 fi
@@ -70,7 +70,7 @@ exec "${VENV_DIR}/bin/python" "${INSTALL_DIR}/stella_ai_coder.py" "\$@"
 EOF
 chmod +x "${BIN_DIR}/stella"
 
-printf "\nStella is installed.\n"
-printf "Run anytime: stella\n"
-printf "If your shell cannot find it, add this to PATH: %s\n\n" "$BIN_DIR"
+printf "\nStella установлена.\n"
+printf "Запуск в любое время: stella\n"
+printf "Если shell не видит команду, добавь в PATH: %s\n\n" "$BIN_DIR"
 exec "${BIN_DIR}/stella"

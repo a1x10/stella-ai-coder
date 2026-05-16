@@ -1,12 +1,10 @@
 # Stella AI Coder
 
-Beautiful local terminal AI coding agent powered by Ollama and Qwen.
+Русский локальный терминальный ИИ-агент для программирования на базе Ollama и Qwen.
 
-Stella can inspect files, edit code, create projects, run tests, use Git/GitHub CLI, fetch public URLs, and run powerful terminal commands after user confirmation.
+Stella умеет читать и редактировать код, создавать проекты, запускать тесты, работать с Git/GitHub CLI, искать информацию в интернете, открывать браузер, выполнять команды терминала и помогать с сервером. Сильные действия выполняются только после подтверждения пользователя.
 
-## One-command install
-
-Replace `a1x10` with your GitHub username after publishing this repo.
+## Установка одной командой
 
 ### Windows PowerShell
 
@@ -14,7 +12,7 @@ Replace `a1x10` with your GitHub username after publishing this repo.
 irm https://raw.githubusercontent.com/a1x10/stella-ai-coder/main/install.ps1 | iex
 ```
 
-After installation:
+После установки:
 
 ```powershell
 stella
@@ -26,53 +24,65 @@ stella
 curl -fsSL https://raw.githubusercontent.com/a1x10/stella-ai-coder/main/install.sh | sh
 ```
 
-After installation:
+После установки:
 
 ```bash
 stella
 ```
 
-## Publish to your GitHub
+## Что она умеет
 
-On Windows PowerShell, from this folder:
+- полностью русский интерфейс и ответы
+- создавать папки и файлы
+- читать, искать и редактировать код
+- собирать проекты и запускать тесты
+- работать с Git, GitHub CLI, Docker, npm, pip, ssh
+- искать в интернете через `web_search`
+- читать публичные страницы через `web_fetch`
+- открывать ссылки в браузере через `open_url`
+- управлять компьютером через терминальные команды с подтверждением
+- хранить историю текущей сессии в `.stella/sessions`
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\publish_to_github.ps1
-```
+## Команды в чате
 
-It will install/use GitHub CLI, open GitHub login if needed, create `stella-ai-coder`, push files, and print the final install command for friends.
+- `/помощь` или `/help` — список команд и инструментов
+- `/доктор` — проверка Python, Ollama, Git, GitHub CLI, Docker, Node, npm
+- `/модель qwen2.5-coder:3b` — переключить модель
+- `/папка C:\path\to\project` — сменить активную папку проекта
+- `/где` — показать активную папку проекта
+- `/очистить` — очистить контекст текущей сессии
+- `/выход` — выйти
 
-## Stronger model
+## Модель посильнее
 
-Default model:
+По умолчанию используется:
 
 ```text
 qwen2.5-coder:1.5b
 ```
 
-Use a stronger model:
+Можно поставить 3B:
 
 ```powershell
 $env:STELLA_MODEL="qwen2.5-coder:3b"; irm https://raw.githubusercontent.com/a1x10/stella-ai-coder/main/install.ps1 | iex
 ```
 
-or after install:
+Или уже внутри Stella:
 
 ```text
-/model qwen2.5-coder:3b
+/модель qwen2.5-coder:3b
 ```
 
-## Chat commands
+## Безопасность
 
-- `/help` shows tools and commands
-- `/doctor` checks Python, Ollama, Git, GitHub CLI, Docker, Node, npm
-- `/model NAME` switches Ollama model
-- `/cd PATH` changes active project root
-- `/pwd` shows active project root
-- `/clear` clears session context
-- `/exit` quits
+Stella может запускать реальные команды на компьютере, GitHub, сервере или через SSH, но команды с риском изменения системы требуют подтверждения. Разрушительные команды блокируются.
 
-## Tool safety
+Если попросить Stella написать Telegram-бота для управления своим компьютером, она должна делать только прозрачный вариант: токен в `.env`, список разрешённых команд, логирование, подтверждения опасных действий и без скрытого автозапуска.
 
-Stella can run real terminal commands, including `git`, `gh`, `ssh`, `docker`, `npm`, and `pip`.
-Commands that can change the system ask for confirmation first. Obviously destructive commands are blocked.
+## Публикация обновлений
+
+Из папки проекта:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\publish_to_github.ps1
+```
