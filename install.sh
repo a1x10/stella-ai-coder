@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-REPO_RAW="${STELLA_REPO_RAW:-https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/stella-ai-coder/main}"
+REPO_RAW="${STELLA_REPO_RAW:-https://raw.githubusercontent.com/a1x10/stella-ai-coder/main}"
 INSTALL_DIR="${HOME}/.stella-ai-coder"
 VENV_DIR="${INSTALL_DIR}/.venv"
 MODEL="${STELLA_MODEL:-qwen2.5-coder:1.5b}"

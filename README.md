@@ -6,12 +6,12 @@ Stella can inspect files, edit code, create projects, run tests, use Git/GitHub 
 
 ## One-command install
 
-Replace `YOUR_GITHUB_USERNAME` with your GitHub username after publishing this repo.
+Replace `a1x10` with your GitHub username after publishing this repo.
 
 ### Windows PowerShell
 
 ```powershell
-irm https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/stella-ai-coder/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/a1x10/stella-ai-coder/main/install.ps1 | iex
 ```
 
 After installation:
@@ -23,7 +23,7 @@ stella
 ### macOS / Linux
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/stella-ai-coder/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/a1x10/stella-ai-coder/main/install.sh | sh
 ```
 
 After installation:
@@ -53,7 +53,7 @@ qwen2.5-coder:1.5b
 Use a stronger model:
 
 ```powershell
-$env:STELLA_MODEL="qwen2.5-coder:3b"; irm https://raw.githubusercontent.com/YOUR_GITHUB_USERNAME/stella-ai-coder/main/install.ps1 | iex
+$env:STELLA_MODEL="qwen2.5-coder:3b"; irm https://raw.githubusercontent.com/a1x10/stella-ai-coder/main/install.ps1 | iex
 ```
 
 or after install:
