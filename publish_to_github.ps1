@@ -37,7 +37,7 @@ if (-not (Test-Command "gh")) {
 gh auth status | Out-Null
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Opening GitHub login in browser..." -ForegroundColor Cyan
-    gh auth login -h github.com -w
+    gh auth login --hostname github.com --web --git-protocol https --scopes repo
     if ($LASTEXITCODE -ne 0) {
         throw "GitHub login failed."
     }
