@@ -34,7 +34,7 @@ from rich.text import Text
 
 
 APP_NAME = "Stella AI Coder"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 DEFAULT_MODEL = os.getenv("STELLA_MODEL", "qwen2.5-coder:1.5b")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 
@@ -60,6 +60,9 @@ SYSTEM_PROMPT = """
 Стиль работы:
 - Всегда отвечай по-русски, если пользователь явно не попросил другой язык.
 - Действуй как аккуратный senior-разработчик: сначала изучай файлы, потом меняй.
+- Если пользователь спрашивает "что в проекте", "расскажи про папку", "проанализируй проект",
+  сначала используй tree/list_dir/read_file/search_text. Никогда не отвечай "я не вижу файлы",
+  пока не попробуешь инструменты.
 - Если нужно написать проект, создай файлы, установи зависимости через команды, запусти тест/проверку и объясни результат.
 - Никогда не притворяйся, что видел файл, сайт или вывод команды. Для реального состояния используй инструменты.
 - Пути держи внутри активной папки проекта, если пользователь явно не сменил корень через /папка или /cd.
@@ -155,6 +158,14 @@ class StellaAgent:
         self._log("root_change", {"root": str(self.root), "model": self.model})
 
     def chat(self, user_text: str) -> str:
+        if looks_like_project_question(user_text):
+            snapshot = self.build_project_snapshot()
+            user_text = (
+                f"{user_text}\n\n"
+                "РЕАЛЬНЫЙ СНИМОК ПРОЕКТА, ПОЛУЧЕННЫЙ ЛОКАЛЬНЫМИ ИНСТРУМЕНТАМИ:\n"
+                f"{snapshot}\n\n"
+                "Ответь по-русски. Опирайся только на эти данные и при необходимости запроси дополнительные файлы через инструменты."
+            )
         self._add_message("user", user_text)
 
         for _ in range(MAX_TOOL_ROUNDS):
@@ -164,6 +175,14 @@ class StellaAgent:
             payload = parse_json_object(assistant_text)
 
             if not payload:
+                if looks_like_false_no_access(assistant_text):
+                    snapshot = self.build_project_snapshot()
+                    self._add_message(
+                        "user",
+                        "Ты ошиблась: файлы доступны через инструменты. Вот реальный снимок проекта:\n"
+                        f"{snapshot}\n\nТеперь кратко расскажи, что это за проект.",
+                    )
+                    continue
                 return assistant_text.strip()
             if "final" in payload:
                 return str(payload["final"]).strip()
@@ -183,7 +202,7 @@ class StellaAgent:
                 {"tool": tool_name, "ok": tool_result.ok, "result": tool_result.content},
                 ensure_ascii=False,
             )
-            self._add_message("user", f"TOOL RESULT:\n{tool_message}")
+            self._add_message("user", f"РЕЗУЛЬТАТ ИНСТРУМЕНТА:\n{tool_message}")
 
         return "Я остановилась после нескольких вызовов инструментов, чтобы не уйти в бесконечный цикл. Напиши `продолжай`, если нужно идти дальше."
 
@@ -200,7 +219,7 @@ class StellaAgent:
         recent = self.messages[-18:]
         notice = {
             "role": "user",
-            "content": "Context note: older messages were compacted automatically to fit the local model context.",
+            "content": "Заметка контекста: старые сообщения автоматически сжаты, чтобы поместиться в контекст локальной модели.",
         }
         self.messages = system + [notice] + recent
         self._log("context_compact", {"kept_messages": len(self.messages)})
@@ -306,7 +325,55 @@ class StellaAgent:
                 next_prefix = prefix + ("    " if branch == "`-- " else "|   ")
                 self._walk_tree(item, lines, next_prefix, depth - 1)
         if len(items) > len(clipped):
-            lines.append(f"{prefix}`-- ... {len(items) - len(clipped)} more")
+            lines.append(f"{prefix}`-- ... ещё {len(items) - len(clipped)}")
+
+    def build_project_snapshot(self) -> str:
+        tree = self.tool_tree(".", 3).content
+        files = [p for p in self.root.rglob("*") if p.is_file() and not any(part in IGNORED_NAMES for part in p.relative_to(self.root).parts)]
+        suffix_counts: dict[str, int] = {}
+        for path in files:
+            suffix = path.suffix.lower() or "(без расширения)"
+            suffix_counts[suffix] = suffix_counts.get(suffix, 0) + 1
+
+        top_ext = sorted(suffix_counts.items(), key=lambda item: item[1], reverse=True)[:12]
+        important_names = {
+            "README.md",
+            "readme.md",
+            "package.json",
+            "pyproject.toml",
+            "requirements.txt",
+            "Pipfile",
+            "poetry.lock",
+            "Dockerfile",
+            "docker-compose.yml",
+            "compose.yml",
+            "vite.config.js",
+            "next.config.js",
+            "tsconfig.json",
+            "main.py",
+            "app.py",
+        }
+        important_files = [p for p in files if p.name in important_names][:12]
+        previews: list[str] = []
+        for path in important_files:
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            rel = path.relative_to(self.root)
+            previews.append(f"--- {rel} ---\n{text[:2500]}")
+
+        lines = [
+            f"Папка проекта: {self.root}",
+            f"Файлов найдено: {len(files)}",
+            "Основные расширения: " + (", ".join(f"{ext}: {count}" for ext, count in top_ext) if top_ext else "нет файлов"),
+            "",
+            "Дерево проекта:",
+            tree,
+        ]
+        if previews:
+            lines.extend(["", "Важные файлы:", "\n\n".join(previews)])
+        return "\n".join(lines)
 
     def tool_find_files(self, query: str, path: str = ".") -> ToolResult:
         target = self.resolve_path(path)
@@ -659,6 +726,11 @@ def print_help() -> None:
     table.add_row("/модель NAME", "Переключить модель, например /модель qwen2.5-coder:3b")
     table.add_row("/папка PATH", "Сменить активную папку проекта")
     table.add_row("/где или /pwd", "Показать активную папку проекта")
+    table.add_row("/дерево [папка] [глубина]", "Сразу показать дерево файлов без ожидания модели")
+    table.add_row("/список [папка]", "Сразу показать файлы и папки")
+    table.add_row("/обзор", "Сразу изучить проект и попросить Stella описать его")
+    table.add_row("/найти ИМЯ", "Найти файлы по имени")
+    table.add_row("/поиск ТЕКСТ", "Найти текст внутри файлов")
     table.add_row("/очистить", "Очистить память текущей сессии")
     table.add_row("/выход", "Выйти")
     table.add_row("tree / list_dir / find_files / search_text", "Изучение структуры проекта и кода")
@@ -699,6 +771,11 @@ def render_answer(text: str) -> None:
         console.print(Panel(escape_rich(text), title="Stella", border_style="bright_cyan", box=box.ROUNDED))
 
 
+def render_tool_panel(title: str, result: ToolResult) -> None:
+    color = "green" if result.ok else "red"
+    console.print(Panel(escape_rich(result.content), title=title, border_style=color, box=box.ROUNDED))
+
+
 def escape_rich(text: str) -> str:
     return text.replace("[", "\\[").replace("]", "\\]")
 
@@ -706,6 +783,36 @@ def escape_rich(text: str) -> str:
 def strip_html(text: str) -> str:
     text = re.sub(r"<[^>]+>", "", text)
     return html_lib.unescape(re.sub(r"\s+", " ", text)).strip()
+
+
+def looks_like_project_question(text: str) -> bool:
+    lower = text.lower()
+    markers = [
+        "расскажи про мой проект",
+        "расскажи про проект",
+        "что за проект",
+        "что в этой папке",
+        "что в папке",
+        "проанализируй проект",
+        "обзор проекта",
+        "посмотри проект",
+        "изучи проект",
+        "разбери проект",
+    ]
+    return any(marker in lower for marker in markers)
+
+
+def looks_like_false_no_access(text: str) -> bool:
+    lower = text.lower()
+    markers = [
+        "не вижу файлы",
+        "не видю файлы",
+        "не могу предоставить информацию",
+        "не имею доступа к файлам",
+        "не вижу папки",
+        "не могу видеть файлы",
+    ]
+    return any(marker in lower for marker in markers)
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -759,6 +866,48 @@ def main(argv: list[str] | None = None) -> int:
         if lower in {"/clear", "/очистить"}:
             agent.clear()
             console.print("[green]Контекст очищен.[/green]")
+            continue
+        if "tree / list_dir" in lower or lower.strip() in {"tree", "list_dir", "find_files", "search_text"}:
+            render_tool_panel("Дерево проекта", agent.tool_tree(".", 3))
+            console.print("[dim]Это внутренние инструменты. Для прямого вызова используй /дерево, /список, /найти или /поиск.[/dim]")
+            continue
+        if lower.startswith("/tree") or lower.startswith("/дерево"):
+            parts = user_text.split()
+            path = parts[1] if len(parts) >= 2 else "."
+            depth = 3
+            if len(parts) >= 3:
+                try:
+                    depth = int(parts[2])
+                except ValueError:
+                    depth = 3
+            render_tool_panel("Дерево проекта", agent.tool_tree(path, depth))
+            continue
+        if lower.startswith("/ls") or lower.startswith("/список"):
+            parts = user_text.split(maxsplit=1)
+            path = parts[1].strip() if len(parts) == 2 else "."
+            render_tool_panel("Список файлов", agent.tool_list_dir(path))
+            continue
+        if lower.startswith("/find") or lower.startswith("/найти"):
+            parts = user_text.split(maxsplit=1)
+            if len(parts) == 1:
+                console.print("[yellow]Использование: /найти часть_имени_файла[/yellow]")
+                continue
+            render_tool_panel("Найденные файлы", agent.tool_find_files(parts[1].strip()))
+            continue
+        if lower.startswith("/search") or lower.startswith("/поиск"):
+            parts = user_text.split(maxsplit=1)
+            if len(parts) == 1:
+                console.print("[yellow]Использование: /поиск текст_или_regex[/yellow]")
+                continue
+            render_tool_panel("Поиск по файлам", agent.tool_search_text(parts[1].strip()))
+            continue
+        if lower in {"/обзор", "/overview", "/анализ"}:
+            try:
+                answer = agent.chat("Проанализируй проект и расскажи, что это за проект, какие технологии используются и что запускать.")
+            except RuntimeError as exc:
+                console.print(Panel(str(exc), title="Ошибка", border_style="red"))
+                continue
+            render_answer(answer)
             continue
         if lower.startswith("/model") or lower.startswith("/модель"):
             parts = user_text.split(maxsplit=1)
